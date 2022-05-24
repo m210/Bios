@@ -37,7 +37,7 @@ public class LzhHeader {
         this.filenameLen = bb.get() & 0xFF;
         byte[] name = new byte[filenameLen];
         bb.get(name);
-        this.filename = new String(name);
+        this.filename = new String(name);  
     }
 
 }

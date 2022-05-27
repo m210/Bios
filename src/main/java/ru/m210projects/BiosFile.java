@@ -114,22 +114,6 @@ public class BiosFile {
                 return;
             }
 
-//            int pos = ((imageSize - (decompBlockSize + bootBlockSize)) & 0xFFFFF000) + 0xFFE;
-//
-//            int csum1 = 0x00;
-//            int csum2 = 0xD8;
-//            int count = pos;
-//
-//            int s = 0;
-//            while (count-- != 0) {
-//                int ch = imageData[s++];
-//                csum1 += ch;
-//                csum2 += pos + ch;
-//            }
-//
-//            System.out.println(Integer.toHexString((csum1) & 0xFF));
-//            System.out.println(Integer.toHexString((csum2) & 0xFF));
-
             // load the file table
             this.layout = BiosLayout.LAYOUT_UNKNOWN;
             int fileCount = 0;
@@ -162,10 +146,6 @@ public class BiosFile {
                         break;
 
                     e.printStackTrace();
-                    break;
-                }
-
-                if(header.getPath().equals("awdflash.exe")) {
                     break;
                 }
 
@@ -331,25 +311,6 @@ public class BiosFile {
 
                     // advance pointer past this file
                     ptr += (2 + header.getSize() + header.getCompressedSize());
-
-                    // skip past extra data
-                    switch (this.layout) {
-                        case LAYOUT_2_2_2:
-                            ptr += 2;
-                            break;
-                        case LAYOUT_2_1_1:
-                            if (curFile == 0) {
-                                ptr += 2;
-                            } else {
-                                ptr++;
-                            }
-                            break;
-                        case LAYOUT_1_1_1:
-                            ptr++;
-                            break;
-                        default:
-                            break;
-                    }
                 }
 
                 ptr++;

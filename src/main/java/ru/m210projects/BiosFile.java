@@ -8,9 +8,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import jp.gr.java_conf.dangan.io.LittleEndian;
-import jp.gr.java_conf.dangan.util.lha.LhaHeader;
-import jp.gr.java_conf.dangan.util.lha.LhaInputStream;
-import jp.gr.java_conf.dangan.util.lha.LhaOutputStream;
+import jp.gr.java_conf.dangan.util.lha.*;
 
 public class BiosFile {
 
@@ -30,6 +28,7 @@ public class BiosFile {
 
     public static final int TYPEID_DECOMPBLOCK = 0x01;
     public static final int TYPEID_BOOTBLOCK = 0x02;
+    private BIOSVersion version = null;
 
     boolean modified;                // has this image been modified?
     String fname;                    // full path/name of image loaded
@@ -39,6 +38,19 @@ public class BiosFile {
     List<FileEntry> fileTable;       // uncompressed data of all files
     int tableOffset;                 // offset of dynamic file table from start of image
     int maxTableSize;                // maximum compressed size allowed in the file table
+
+    public int getSum(int pos, int st) {
+        int csum2 = st;
+        int count = pos;
+
+        int s = 0;
+        while (count-- != 0) {
+            int ch = imageData[s++] & 0xFF;
+            csum2 += pos + ch;
+        }
+
+        return csum2 & 0xFF;
+    }
 
     public BiosFile(String filename) throws IOException {
         try (RandomAccessFile fp = new RandomAccessFile(new File(filename), "r")) {
@@ -69,20 +81,14 @@ public class BiosFile {
             // scan for the boot and decompression blocks, and extract them
             System.out.println("Scanning for Boot Block...");
 
-            int ptr = 0;
+            int ptr = getIndexOf(imageData, 0, "Award BootBlock Bios");
             byte[] bootBlockData = null;
             int bootBlockSize = 0;
 
-            for (int count = this.imageSize; count >= 0; count--, ptr++) {
-                if (!memcmp(imageData, ptr, "Award BootBlock Bios", 20)) {
-                    bootBlockSize = this.imageSize - ptr;
-                    bootBlockData = new byte[bootBlockSize];
-
-                    System.out.println("Award BootBlock Bios = " + bootBlockSize);
-
-                    System.arraycopy(this.imageData, ptr, bootBlockData, 0, bootBlockSize);
-                    break;
-                }
+            if (ptr != -1) {
+                bootBlockSize = this.imageSize - ptr;
+                bootBlockData = new byte[bootBlockSize];
+                System.arraycopy(this.imageData, ptr, bootBlockData, 0, bootBlockSize);
             }
 
             if (bootBlockData == null) {
@@ -93,21 +99,13 @@ public class BiosFile {
 
             // next, decompression block...
             System.out.println("Scanning for Decompression Block...");
-
-            ptr = 0;
+            ptr = getIndexOf(imageData, 0, "= Award Decompression Bios =");
             byte[] decompBlockData = null;
             int decompBlockSize = 0;
-
-            for (int count = this.imageSize; count >= 0; count--, ptr++) {
-                if (!memcmp(imageData, ptr, "= Award Decompression Bios =", 28)) {
-                    decompBlockSize = this.imageSize - ptr - bootBlockSize;
-                    decompBlockData = new byte[decompBlockSize];
-
-                    System.out.println("= Award Decompression Bios = " + decompBlockSize);
-
-                    System.arraycopy(this.imageData, ptr, decompBlockData, 0, decompBlockSize);
-                    break;
-                }
+            if (ptr != -1) {
+                decompBlockSize = this.imageSize - ptr - bootBlockSize;
+                decompBlockData = new byte[decompBlockSize];
+                System.arraycopy(this.imageData, ptr, decompBlockData, 0, decompBlockSize);
             }
 
             if (decompBlockData == null) {
@@ -115,6 +113,22 @@ public class BiosFile {
                 System.err.println("The editor will still be able to modify this image, but this component will be unaccessable.  unaccessable.  Re-flashing with a saved version of this BIOS is NOT RECOMMENDED!");
                 return;
             }
+
+//            int pos = ((imageSize - (decompBlockSize + bootBlockSize)) & 0xFFFFF000) + 0xFFE;
+//
+//            int csum1 = 0x00;
+//            int csum2 = 0xD8;
+//            int count = pos;
+//
+//            int s = 0;
+//            while (count-- != 0) {
+//                int ch = imageData[s++];
+//                csum1 += ch;
+//                csum2 += pos + ch;
+//            }
+//
+//            System.out.println(Integer.toHexString((csum1) & 0xFF));
+//            System.out.println(Integer.toHexString((csum2) & 0xFF));
 
             // load the file table
             this.layout = BiosLayout.LAYOUT_UNKNOWN;
@@ -124,11 +138,9 @@ public class BiosFile {
             System.out.println("Parsing File Table...");
 
             // first, determine the offset of the file table
-            for (ptr = 0; ptr < this.imageSize; ptr++) {
-                if (!memcmp(imageData, ptr + 2, "-lh", 3)) {
-                    this.tableOffset = ptr;
-                    break;
-                }
+            ptr = getIndexOf(imageData, 2, "-lh");
+            if (ptr != -1) {
+                this.tableOffset = ptr;
             }
 
             if (this.tableOffset == 0xDEADBEEF) {
@@ -144,20 +156,23 @@ public class BiosFile {
             while (true) {
                 BiosLhaHeader header = null;
                 try {
-                	header = new BiosLhaHeader(Arrays.copyOfRange(imageData, ptr, ptr + 255));
-                } catch(Exception e) {
-                	if(e.getMessage().equals("unknown header level \"-1\"."))
-                		break;
-                	
-                	e.printStackTrace();
-                	break;
+                    header = new BiosLhaHeader(Arrays.copyOfRange(imageData, ptr, ptr + 255));
+                } catch (Exception e) {
+                    if (e.getMessage().equals("unknown header level \"-1\"."))
+                        break;
+
+                    e.printStackTrace();
+                    break;
                 }
-  
+
+                if(header.getPath().equals("awdflash.exe")) {
+                    break;
+                }
+
                 // advance to next file
                 fileCount++;
+                int offs = ptr;
                 ptr += (2 + header.getSize() + header.getCompressedSize());
-
-                System.err.println(new String(imageData, ptr, 8));
 
                 // see how many bytes are needed to get to the next file, and adjust the type if necessary...
                 if (fileCount == 1) {
@@ -222,7 +237,6 @@ public class BiosFile {
                         }
                     }
                 }
-                
             }
 
             // check for a valid layout
@@ -231,7 +245,7 @@ public class BiosFile {
                         "It is possible that this version of the editor simply does not support this type.\n\n" +
                         "Please check the homepage listed under Help.About and see if a new version is\n" +
                         "available for download.");
-               return;
+                return;
             }
 
             // allocate our file table space...
@@ -244,19 +258,20 @@ public class BiosFile {
             int curFile = 0;
             ptr = this.tableOffset;
             while (true) {
-            	BiosLhaHeader header = null;
+                BiosLhaHeader header = null;
                 try {
-                	header = new BiosLhaHeader(Arrays.copyOfRange(imageData, ptr, ptr + 255));
-                } catch(Exception e) {
-                	break;
+                    header = new BiosLhaHeader(Arrays.copyOfRange(imageData, ptr, ptr + 255));
+                } catch (Exception e) {
+                    break;
                 }
 
-              
+
                 // fill out fileentry for this file
                 FileEntry fe = new FileEntry();
                 fileTable.add(fe);
 
                 biosWriteEntry(fe, header, ptr);
+                fe.offset = 0;
 
                 // advance to next file
                 ptr += (2 + header.getSize() + header.getCompressedSize());
@@ -281,7 +296,7 @@ public class BiosFile {
                 }
 
                 curFile++;
-                
+
             }
 
             // calculate available table space
@@ -297,10 +312,11 @@ public class BiosFile {
                     // found something... maybe...
                     BiosLhaHeader header = null;
                     try {
-                    	header = new BiosLhaHeader(Arrays.copyOfRange(imageData, ptr, ptr + 255));
-                    } catch(Exception e) {
-                    	continue;
+                        header = new BiosLhaHeader(Arrays.copyOfRange(imageData, ptr, ptr + 255));
+                    } catch (Exception e) {
+                        continue;
                     }
+                    int offs = ptr;
 
                     // we found something!  add it to our table
                     FileEntry fe = new FileEntry();
@@ -315,6 +331,25 @@ public class BiosFile {
 
                     // advance pointer past this file
                     ptr += (2 + header.getSize() + header.getCompressedSize());
+
+                    // skip past extra data
+                    switch (this.layout) {
+                        case LAYOUT_2_2_2:
+                            ptr += 2;
+                            break;
+                        case LAYOUT_2_1_1:
+                            if (curFile == 0) {
+                                ptr += 2;
+                            } else {
+                                ptr++;
+                            }
+                            break;
+                        case LAYOUT_1_1_1:
+                            ptr++;
+                            break;
+                        default:
+                            break;
+                    }
                 }
 
                 ptr++;
@@ -326,14 +361,11 @@ public class BiosFile {
                 fileTable.add(fe);
 
                 String name = "decomp_blk.bin";
-                fe.nameLen = name.length();
                 fe.name = name;
-
                 fe.size = decompBlockSize;
                 fe.compSize = 0;
                 fe.type = TYPEID_DECOMPBLOCK;
                 fe.crc = 0;
-                fe.crcOK = true;
                 fe.data = new byte[fe.size];
                 fe.offset = 0;
                 fe.flags = 1; //FEFLAGS_DECOMP_BLOCK;
@@ -346,191 +378,210 @@ public class BiosFile {
                 fileTable.add(fe);
 
                 String name = "boot_blk.bin";
-                fe.nameLen = name.length();
                 fe.name = name;
                 fe.size = bootBlockSize;
                 fe.compSize = 0;
                 fe.type = TYPEID_BOOTBLOCK;
                 fe.crc = 0;
-                fe.crcOK = true;
                 fe.data = new byte[fe.size];
                 fe.offset = 0;
                 fe.flags = 2; //FEFLAGS_BOOT_BLOCK;
 
                 System.arraycopy(bootBlockData, 0, fe.data, 0, bootBlockSize);
             }
+
+            this.version = getVersion();
         }
     }
-    
+
     public void saveFile(String fileName) throws IOException {
-    	System.out.println("Saving Image...");
-    	ByteBuffer bb = ByteBuffer.allocate(imageSize).order(ByteOrder.LITTLE_ENDIAN);
+        System.out.println("Saving Image...");
+        ByteBuffer bb = ByteBuffer.allocate(imageSize).order(ByteOrder.LITTLE_ENDIAN);
         for (int i = 0; i < imageSize; i++) {
             bb.put(i, (byte) 0xFF);
         }
 
-    	System.out.println("Writing components...");
-    	// iterate through all files with no fixed offset and no special flags, compress them, and write them
-    	int t = 0;
-    	for(FileEntry fe : fileTable) {
-    		if ((fe.offset == 0) && (fe.flags == 0)) {
+        System.out.println("Writing components...");
+        // iterate through all files with no fixed offset and no special flags, compress them, and write them
+        int t = 0;
+        for (FileEntry fe : fileTable) {
+            if ((fe.offset == 0) && (fe.flags == 0)) {
+
+                if(fe.name.equals("AWARDEPA.BIN")) {
+                    fe.modified = false;
+                }
+
+
+
                 biosWriteComponent(fe, bb, t++);
-            } else if (fe.offset != 0) {
-//                biosWriteComponent(fe, bb, -1);
-                biosWriteComponent(fe, bb, 0); //TODO
             }
-    	}
-    	
-    	// write the decompression and boot blocks...
-    	System.out.println("Writing boot/decomp blocks...");
-    	
-    	FileEntry fe = scanForID(TYPEID_DECOMPBLOCK);
-    	int decompSize = ((fe == null) ? (0) : (fe.size));
+        }
 
-    	fe = scanForID(TYPEID_BOOTBLOCK);
-    	int bootSize = ((fe == null) ? (0) : (fe.size));
-    	
-    	bb.position(imageSize - (decompSize + bootSize));
+        // write the decompression and boot blocks...
+        System.out.println("Writing boot/decomp blocks...");
 
-    	// write the blocks
-    	fe = scanForID(TYPEID_DECOMPBLOCK);
-    	if (fe != null) {
-    		bb.put(fe.data, 0, fe.size);
-    	}
+        FileEntry fe = scanForID(TYPEID_DECOMPBLOCK);
+        int decompSize = ((fe == null) ? (0) : (fe.size));
 
-    	fe = scanForID(TYPEID_BOOTBLOCK);
-    	if (fe != null) {
-    		bb.put(fe.data, 0, fe.size);
-    	}
+        fe = scanForID(TYPEID_BOOTBLOCK);
+        int bootSize = ((fe == null) ? (0) : (fe.size));
 
-    	// now write components which have a fixed offset
-    	System.out.println("Writing fixed components...");
-    	/*
-    	for(FileEntry f : fileTable) {
-    		if ((f.offset != 0)) {
-    			bb.position(f.offset);
-    			biosWriteComponent(f, bb, -1);
-    		}
-    	}
-    	*/
-    	
-    	// finally, if the BIOS is version 6.00PG, update the internal checksum in the decompression block...
-    	if (getVersion() == BIOSVersion.Ver600PG) {
-    		fe = scanForID(TYPEID_DECOMPBLOCK);
-    		if (fe != null) {
-    			// re-open the file in read-only mode
-    			bb.rewind();
-    			
-    			// calculate the position of the checksum bytes
-    			int pos = ((imageSize - (decompSize + bootSize)) & 0xFFFFF000) + 0xFFE;
+        bb.position(imageSize - (decompSize + bootSize));
 
-    			// calculate the checksum
-    			int csum1 = 0x00;
-    			int csum2 = 0xF8; //0x6E;
-    			int count = pos;
+        // write the blocks
+        fe = scanForID(TYPEID_DECOMPBLOCK);
+        if (fe != null) {
+            bb.put(fe.data, 0, fe.size);
+        }
 
-    			while (count-- != 0) {
-    				int ch = bb.get() & 0xFF;
-    				csum1 += ch;
-    				csum2 += ch;
-    			}
+        fe = scanForID(TYPEID_BOOTBLOCK);
+        if (fe != null) {
+            bb.put(fe.data, 0, fe.size);
+        }
 
-    			// seek to the checksum position
-    			bb.position(pos);
+        // now write components which have a fixed offset
+        System.out.println("Writing fixed components...");
+        for (FileEntry f : fileTable) {
+            if (f.offset != 0) {
+                bb.position(f.offset);
+                biosWriteComponent(f, bb, -1);
+            }
+        }
 
-    			// write the checksum bytes
-    			bb.put((byte) csum1);
-    			bb.put((byte) csum2);
-    		}
-    	}
-    	
-    	bb.rewind();
-    	try(FileOutputStream out = new FileOutputStream(fileName)) {
-    		while(bb.hasRemaining()) {
-    			out.write(bb.get());
-    		}
-    	}
+        // finally, if the BIOS is version 6.00PG, update the internal checksum in the decompression block...
+        if (getVersion() == BIOSVersion.Ver600PG) {
+            fe = scanForID(TYPEID_DECOMPBLOCK);
+            if (fe != null) {
+                // re-open the file in read-only mode
+                bb.rewind();
+
+                // calculate the position of the checksum bytes
+                int pos = ((imageSize - (decompSize + bootSize)) & 0xFFFFF000) + 0xFFE;
+
+                // calculate the checksum
+                int csum1 = 0x00;
+                int csum2 = 0xD8;
+                int count = pos;
+
+                while (count-- != 0) {
+                    int ch = bb.get() & 0xFF;
+                    csum1 += ch;
+                    csum2 += pos + ch;
+                }
+
+                // seek to the checksum position
+                bb.position(pos);
+
+                // write the checksum bytes
+                bb.put((byte) csum1);
+                bb.put((byte) csum2);
+            }
+        }
+
+        bb.rewind();
+        try (FileOutputStream out = new FileOutputStream(fileName)) {
+            while (bb.hasRemaining()) {
+                out.write(bb.get());
+            }
+        }
     }
 
-    private boolean memcmp(byte[] data, int ptr, String ref, int length) {
+    public static boolean memcmp(byte[] data, int ptr, String ref, int length) {
         return !ref.equalsIgnoreCase(new String(data, ptr, length));
     }
-    
-    private void biosWriteComponent(FileEntry fe, ByteBuffer fp, int fileIdx) throws IOException {
-    	try(ByteArrayOutputStream compressedDataStream = new ByteArrayOutputStream()) {
-    		try(LhaOutputStream out = new LhaOutputStream(compressedDataStream)) {
-    			BiosLhaHeader header = new BiosLhaHeader(fe.name, fe.type);
-				out.putNextEntry(header);
-				out.write(fe.data);
-	    	}
-	
-    		byte[] compressedData = compressedDataStream.toByteArray();
-            fp.put(compressedData);
 
-			// calculate checksum over LZH header and compressed data
-            int csum = 0x00;
-            int cptr = 2 + (compressedData[0] & 0xFF);
-            int usedsize = LittleEndian.readShort(compressedData, 7);
-			while (usedsize-- != 0) {
-				csum += compressedData[cptr++];
-			}
-			
-			int ebcount = 2;
-			
-			// write extra bytes, depending on the layout
-	    	if (fileIdx != -1) {
-	    		switch (layout) {
-	    			case LAYOUT_2_2_2:
-	    				ebcount = 2;
-	    				break;
-	    			case LAYOUT_2_1_1:
-	    				if (fileIdx == 0)
-	    					ebcount = 2;
-	    				else
-	    					ebcount = 1;
-	    				break;
-	    			case LAYOUT_1_1_1:
-	    				ebcount = 1;
-	    				break;
-	    			default:
-	    				break;
-	    		}
-	    	}
-	
-	    	if (ebcount > 0) {
-	    		fp.put((byte) 0x00);
-	    		if (ebcount > 1) {
-	    			fp.put((byte) csum);
-	    		}
-		    }
-    	}
+    private void biosWriteComponent(FileEntry fe, ByteBuffer fp, int fileIdx) throws IOException {
+        int csum = 0x00;
+        if(!fe.modified) {
+            fp.put(fe.compressedData);
+
+            // calculate checksum over LZH header and compressed data
+            int cptr = 2 + (fe.compressedData[0] & 0xFF);
+            int usedsize = LittleEndian.readInt(fe.compressedData, 7);
+            while (usedsize-- != 0) {
+                csum += fe.compressedData[cptr++];
+            }
+        } else {
+            try (ByteArrayOutputStream compressedDataStream = new ByteArrayOutputStream()) {
+                try (LhaOutputStream out = new LhaOutputStream(compressedDataStream)) {
+                    BiosLhaHeader header = new BiosLhaHeader(fe.name, fe.type);
+                    out.putNextEntry(header);
+                    out.write(fe.data);
+                }
+
+                byte[] compressedData = compressedDataStream.toByteArray();
+                fp.put(compressedData);
+
+                // calculate checksum over LZH header and compressed data
+                int cptr = 2 + (compressedData[0] & 0xFF);
+                int usedsize = LittleEndian.readInt(compressedData, 7);
+                while (usedsize-- != 0) {
+                    csum += compressedData[cptr++];
+                }
+            }
+        }
+
+        int ebcount = 2;
+        // write extra bytes, depending on the layout
+        if (fileIdx != -1) {
+            switch (layout) {
+                case LAYOUT_2_2_2:
+                    ebcount = 2;
+                    break;
+                case LAYOUT_2_1_1:
+                    if (fileIdx == 0)
+                        ebcount = 2;
+                    else
+                        ebcount = 1;
+                    break;
+                case LAYOUT_1_1_1:
+                    ebcount = 1;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (ebcount > 0) {
+            fp.put((byte) 0x00);
+            if (ebcount > 1) {
+                fp.put((byte) csum);
+            }
+        }
     }
 
     private void biosWriteEntry(FileEntry fe, BiosLhaHeader lzhhdr, int offset) {
-        fe.nameLen = lzhhdr.getPath().length();
         fe.name = lzhhdr.getPath();
         fe.size = (int) lzhhdr.getOriginalSize();
         fe.compSize = (int) lzhhdr.getCompressedSize();
         fe.type = lzhhdr.getFileType();
         fe.data = new byte[fe.size];
+        fe.compressedData = new byte[2 + fe.compSize + lzhhdr.getSize()];
         fe.offset = offset;
         fe.flags = 0;
 
+        System.arraycopy(imageData, offset, fe.compressedData, 0, fe.compressedData.length);
+
         // decompress file
-        try (LhaInputStream lis = new LhaInputStream(new ByteArrayInputStream(this.imageData, offset, fe.size + lzhhdr.getSize()))) {
+        try (LhaInputStream lis = new LhaInputStream(new ByteArrayInputStream(this.imageData, offset, 2 + fe.size + lzhhdr.getSize()))) {
             LhaHeader header = lis.getNextEntry();
             if (header == null) {
-                throw new IOException("Header is null");
+                throw new IOException("Error extracting component!\n\nThis BIOS Image may be corrupted or damaged.  The editor will still continue to load\n" +
+                        "the image, but certain components may not be editable.");
             }
+
             lis.read(fe.data);
+
+            CRC16 crc16 = new CRC16();
+            crc16.update(fe.data);
+            if (crc16.getValue() != header.getCRC()) {
+                throw new IOException("CRC check failed!\n\nThis BIOS Image may be corrupted or damaged.  The editor will still continue to load\n" +
+                        "the image, but certain components may not be editable.\n");
+            }
+
             fe.crc = header.getCRC();
-            fe.crcOK = true;
         } catch (IOException e) {
             e.printStackTrace();
-
-            fe.crcOK = false;
-            System.err.println("Error extracting component!\n\nThis BIOS Image may be corrupted or damaged.  The editor will still continue to load\n" +
-                    "the image, but certain components may not be editable.");
         }
     }
 
@@ -543,7 +594,21 @@ public class BiosFile {
         return null;
     }
 
+    public static int getIndexOf(byte[] data, int offset, String text) {
+        int ptr = 0;
+        for (int count = data.length - 1; count >= 0; count--, ptr++) {
+            if (!memcmp(data, ptr + offset, text, text.length())) {
+                return ptr;
+            }
+        }
+        return -1;
+    }
+
     public BIOSVersion getVersion() {
+        if (version != null) {
+            return version;
+        }
+
         FileEntry fe = scanForID(0x5000);
         if (fe == null) {
             return BIOSVersion.VerUnknown;
@@ -566,5 +631,27 @@ public class BiosFile {
         }
 
         return BIOSVersion.VerUnknown;
+    }
+
+    public List<String> calcChecksum() {
+        FileEntry fe = scanForID(TYPEID_DECOMPBLOCK);
+        int decompBlockSize = fe.size;
+        fe = scanForID(TYPEID_BOOTBLOCK);
+        int bootBlockSize = fe.size;
+
+        int pos = ((imageSize - (decompBlockSize + bootBlockSize)) & 0xFFFFF000) + 0xFFE;
+
+        int csum1 = 0x00;
+        int csum2 = 0xD8;
+        int count = pos;
+
+        int s = 0;
+        while (count-- != 0) {
+            int ch = imageData[s++];
+            csum1 += ch;
+            csum2 += pos + ch;
+        }
+
+        return List.of("0x" + Integer.toHexString(csum1 & 0xFF), "0x" + Integer.toHexString(csum2 & 0xFF));
     }
 }

@@ -1,83 +1,51 @@
 package ru.m210projects;
 
-import jp.gr.java_conf.dangan.util.lha.LhaHeader;
-import jp.gr.java_conf.dangan.util.lha.LhaOutputStream;
-
 import java.io.*;
 
 public class Main {
-	
+
 	public static void main(String[] arg) throws IOException {
-		biosOpenFile("6via82p03.bin");
-		//biosOpenFile("test.bin");
-		
-		/*
-		FileInputStream fis = new FileInputStream("test.lha");
-		//byte[] data = new byte[64];
-		//fis.read(data);
-		//new LzhHeader(data, 0);
-		
-		LhaInputStream in = new LhaInputStream(fis);
-		LhaHeader header = in.getNextEntry();
-		
-		
-		
-		/*
-		int i = 0;
-		byte[] data = new byte[(int) header.getOriginalSize()];
-		while(i < header.getOriginalSize()) {
-			data[i++] = (byte) in.read();
-		}
-		
-		CRC16 crc = new CRC16();
-		crc.update(data);
-		System.err.println(crc.getValue() + " " + header.getCRC());
-		*/
+		//biosOpenFile("6via3801.bin");
+		biosOpenFile("test.bin");
 	}
 	
 	
 	public static void biosOpenFile(String filename) throws IOException {
 		BiosFile biosData = new BiosFile(filename);
 
-		System.out.println(biosData.getVersion());
+		//System.out.println(biosData.getVersion());
 
 		for(FileEntry fe : biosData.fileTable) {
 			System.err.println(fe.name + " 0x" +  Integer.toHexString(fe.type));
-
-
-//			if(fe.name.equals("awardeyt.rom")) {
-//				LhaOutputStream out = new LhaOutputStream(new FileOutputStream("test.lha"));
-//				LhaHeader header = new BiosLhaHeader(fe.name, fe.type);
-//
-//				/*
-//				header.setCRC(fe.crc);
-//				header.setCompressedSize(fe.compSize);
-//				header.setOriginalSize(fe.size);
-//
-//				byte[] headerData = header.getBytes();
-//				new LzhHeader(headerData, 0);
-//				*/
-//
-//
-//				out.putNextEntry(header);
-//				out.write(fe.data);
-//				out.close();
-//			}
-
-
-			/*
-			FileOutputStream out = new FileOutputStream(fe.name);
-			out.write(fe.data);
-			out.close();
-			
-			/*
-			String name = h.fileName.replaceFirst("[.][^.]+$", ".lha");
-			Path file = Files.createFile(Paths.get(name));
-			Files.write(file, h.getData(), StandardOpenOption.TRUNCATE_EXISTING);
-			*/
 		}
+
+		System.out.println(biosData.getVersion());
+		System.out.println(biosData.calcChecksum());
+
+		/*
+		FileEntry original = biosData.scanForID(0x5000);
+		byte[] origianlData = original.data;
+
+		int ptr = 0x10E0D;
 		
-		biosData.saveFile("test.bin");
+		// Register Table
+		for(int i = 0; i < 23; i++) {
+			origianlData[ptr++] = 2; // Register index
+			origianlData[ptr++] = 9; // Device (5 bit) | Function (3 bit)
+			origianlData[ptr++] = (byte) 0xFF; // Mask
+			origianlData[ptr++] = 0; // Always 0 ?
+			origianlData[ptr++] = (byte) 0x3F; // Value
+			origianlData[ptr++] = 0; // Always 0 ?
+			System.err.println(Integer.toHexString(origianlData[ptr++])); //2 or 36 (end)
+			System.err.println();
+		}
+		*/
+
+//		biosData.layout = BiosFile.BiosLayout.LAYOUT_1_1_1;
+//		FileEntry original = biosData.scanForID(0x5000);
+//		original.offset = 0x20000;
+//
+//		biosData.saveFile("test.bin");
 	}
 
 }

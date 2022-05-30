@@ -39,19 +39,6 @@ public class BiosFile {
     int tableOffset;                 // offset of dynamic file table from start of image
     int maxTableSize;                // maximum compressed size allowed in the file table
 
-    public int getSum(int pos, int st) {
-        int csum2 = st;
-        int count = pos;
-
-        int s = 0;
-        while (count-- != 0) {
-            int ch = imageData[s++] & 0xFF;
-            csum2 += pos + ch;
-        }
-
-        return csum2 & 0xFF;
-    }
-
     public BiosFile(String filename) throws IOException {
         try (RandomAccessFile fp = new RandomAccessFile(new File(filename), "r")) {
             this.imageSize = (int) fp.length();
@@ -367,13 +354,6 @@ public class BiosFile {
         int t = 0;
         for (FileEntry fe : fileTable) {
             if ((fe.offset == 0) && (fe.flags == 0)) {
-
-                if(fe.name.equals("AWARDEPA.BIN")) {
-                    fe.modified = false;
-                }
-
-
-
                 biosWriteComponent(fe, bb, t++);
             }
         }
@@ -455,13 +435,7 @@ public class BiosFile {
         int csum = 0x00;
         if(!fe.modified) {
             fp.put(fe.compressedData);
-
-            // calculate checksum over LZH header and compressed data
-            int cptr = 2 + (fe.compressedData[0] & 0xFF);
-            int usedsize = LittleEndian.readInt(fe.compressedData, 7);
-            while (usedsize-- != 0) {
-                csum += fe.compressedData[cptr++];
-            }
+            csum = fe.crc >> 8;
         } else {
             try (ByteArrayOutputStream compressedDataStream = new ByteArrayOutputStream()) {
                 try (LhaOutputStream out = new LhaOutputStream(compressedDataStream)) {
@@ -614,5 +588,38 @@ public class BiosFile {
         }
 
         return List.of("0x" + Integer.toHexString(csum1 & 0xFF), "0x" + Integer.toHexString(csum2 & 0xFF));
+    }
+
+    public boolean changeModule(String filename, int type) {
+        FileEntry fe = scanForID(type);
+        if(fe == null) {
+            return false;
+        }
+
+        try (RandomAccessFile fp = new RandomAccessFile(new File(filename), "r")) {
+            int index = fileTable.indexOf(fe);
+            int flags = fe.flags;
+            int offset = fe.offset;
+            fileTable.remove(index);
+
+            fe = new FileEntry();
+            fe.modified = true;
+            fe.name = filename;
+            fe.size = (int) fp.length();
+            fe.data = new byte[fe.size];
+            fe.type = type;
+            fe.flags = flags;
+            fe.offset = offset;
+
+            fp.read(fe.data);
+
+            fileTable.add(index, fe);
+
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return false;
     }
 }
